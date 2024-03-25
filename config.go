@@ -5,6 +5,7 @@ type Config struct {
 }
 
 type Messages struct {
+	Email     string `json:"email" toml:"email" yaml:"email"`
 	Required  string `json:"required" toml:"required" yaml:"required"`
 	MinText   string `json:"minText" toml:"minText" yaml:"minText"`
 	MaxText   string `json:"maxText" toml:"maxText" yaml:"maxText"`
@@ -14,6 +15,7 @@ type Messages struct {
 
 const (
 	defaultRequiredMessage  = "field is required"
+	defaultEmailMessage     = "email value is invalid"
 	defaultMinTextMessage   = "field length is smaller than should be"
 	defaultMaxTextMessage   = "field length is higher than should be"
 	defaultMinNumberMessage = "field value is smaller than should be"

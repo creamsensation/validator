@@ -2,28 +2,27 @@ package validator
 
 import (
 	"reflect"
+	"regexp"
 )
 
 type Validator interface {
-	Clear() Validator
-	Add(name string) Field
-	Json(data any) Validator
-	Ok() bool
-	Errors() map[string][]string
+	Json(s Schema, data any) (bool, Errors)
 }
 
 type validator struct {
 	config Config
-	errors map[string][]string
-	fields map[string]*field
-	ok     bool
 }
 
+const (
+	emailValidator = "[-A-Za-z0-9!#$%&'*+/=?^_`{|}~]+(?:\\.[-A-Za-z0-9!#$%&'*+/=?^_`{|}~]+)*@(?:[A-Za-z0-9](?:[-A-Za-z0-9]*[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[-A-Za-z0-9]*[A-Za-z0-9])?"
+)
+
+var (
+	emailMatcher = regexp.MustCompile(emailValidator)
+)
+
 func New(config ...Config) Validator {
-	v := &validator{
-		errors: make(map[string][]string),
-		fields: make(map[string]*field),
-	}
+	v := &validator{}
 	if len(config) > 0 {
 		v.config = config[0]
 	}
@@ -31,55 +30,42 @@ func New(config ...Config) Validator {
 	return v
 }
 
-func (v *validator) Add(name string) Field {
-	f := &field{}
-	v.fields[name] = f
-	return f
-}
-
-func (v *validator) Errors() map[string][]string {
-	return v.errors
-}
-
-func (v *validator) Clear() Validator {
-	clear(v.errors)
-	v.ok = false
-	return v
-}
-
-func (v *validator) Json(data any) Validator {
+func (v *validator) Json(s Schema, data any) (bool, Errors) {
+	errors := make(Errors)
 	dt := reflect.TypeOf(data)
 	dv := reflect.ValueOf(data)
 	switch dt.Kind() {
 	case reflect.Struct:
-		v.validateStruct(dt, dv)
+		errors = v.validateStruct(s.(*schema), dt, dv)
 	case reflect.Map:
-		v.validateMap(dv)
+		errors = v.validateMap(s.(*schema), dv)
 	}
-	v.ok = len(v.errors) == 0
-	return v
+	return len(errors) == 0, errors
 }
 
-func (v *validator) Ok() bool {
-	return v.ok
-}
-
-func (v *validator) validateStruct(mt reflect.Type, mv reflect.Value) {
+func (v *validator) validateStruct(s *schema, mt reflect.Type, mv reflect.Value) Errors {
+	errors := make(Errors)
 	for i := 0; i < mv.NumField(); i++ {
 		jsonKey := mt.Field(i).Tag.Get("json")
 		if len(jsonKey) == 0 {
 			continue
 		}
-		errs := v.validateField(jsonKey, mv.Field(i).Interface())
+		f, ok := s.shape[jsonKey]
+		if !ok {
+			continue
+		}
+		errs := v.validateField(f, mv.Field(i).Interface())
 		if len(errs) > 0 {
-			v.errors[jsonKey] = errs
+			errors[jsonKey] = errs
 		}
 	}
+	return errors
 }
 
-func (v *validator) validateMap(mv reflect.Value) {
+func (v *validator) validateMap(s *schema, mv reflect.Value) Errors {
+	errors := make(Errors)
 	keys := mv.MapKeys()
-	for name := range v.fields {
+	for name := range s.shape {
 		exist := false
 		for _, k := range keys {
 			if k.String() == name {
@@ -89,24 +75,28 @@ func (v *validator) validateMap(mv reflect.Value) {
 		if exist {
 			continue
 		}
-		v.errors[name] = []string{v.config.Messages.Required}
+		errors[name] = []string{v.config.Messages.Required}
 	}
 	for _, k := range keys {
-		errs := v.validateField(k.String(), mv.MapIndex(k).Interface())
+		f, ok := s.shape[k.String()]
+		if !ok {
+			continue
+		}
+		errs := v.validateField(f, mv.MapIndex(k).Interface())
 		if len(errs) > 0 {
-			v.errors[k.String()] = errs
+			errors[k.String()] = errs
 		}
 	}
+	return errors
 }
 
-func (v *validator) validateField(key string, value any) []string {
+func (v *validator) validateField(f *field, value any) []string {
 	errs := make([]string, 0)
-	f, ok := v.fields[key]
-	if !ok {
-		return errs
-	}
 	switch val := value.(type) {
 	case string:
+		if f.email && !emailMatcher.MatchString(val) {
+			errs = append(errs, v.config.Messages.Email)
+		}
 		if f.required && len(val) == 0 {
 			errs = append(errs, v.config.Messages.Required)
 		}
@@ -155,6 +145,9 @@ func (v *validator) validateField(key string, value any) []string {
 }
 
 func (v *validator) createDefaultConfig(config Config) Config {
+	if len(config.Messages.Email) == 0 {
+		config.Messages.Email = defaultEmailMessage
+	}
 	if len(config.Messages.Required) == 0 {
 		config.Messages.Required = defaultRequiredMessage
 	}
